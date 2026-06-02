@@ -1,6 +1,6 @@
 # Incident Tracker
 
-FastAPI service for creating and listing incidents, with PostgreSQL persistence, Prometheus metrics, structured logging, and Docker-based deployment.
+FastAPI app for creating and listing incidents. Data goes to PostgreSQL.
 
 Built with FastAPI, SQLAlchemy, and Docker. Logs go to stdout, metrics on `/metrics`.
 
@@ -10,42 +10,63 @@ Built with FastAPI, SQLAlchemy, and Docker. Logs go to stdout, metrics on `/metr
 docker compose up --build
 ```
 
-App: http://localhost:8000  
-Swagger UI: http://localhost:8000/docs
+| Service | URL |
+|---------|-----|
+| API | http://localhost:8000 |
+| Swagger UI | http://localhost:8000/docs |
+| Prometheus | http://localhost:9090 |
+| Grafana | http://localhost:3000 |
 
 ### Environment variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DATABASE_URL` | *(see docker-compose)* | SQLAlchemy database URL |
-| `LOG_LEVEL` | `INFO` | Python log level |
-| `POSTGRES_USER` | `incident_user` | PostgreSQL user |
-| `POSTGRES_PASSWORD` | `incident_pass` | PostgreSQL password |
-| `POSTGRES_DB` | `incidents` | PostgreSQL database name |
-| `APP_PORT` | `8000` | Host port for the API |
-| `POSTGRES_PORT` | `5432` | Host port for PostgreSQL |
+Default DB credentials: `incident_user` / `incident_pass`, database `incidents`.
+
+Override ports with env vars like `APP_PORT`, `GRAFANA_PORT`, etc. (see `docker-compose.yml`).
+
+## Observability
+
+Compose starts a small observability stack alongside the app:
+
+- **Prometheus** scrapes `http://app:8000/metrics` every 15s
+- **Promtail** reads Docker container logs from the host and pushes them to **Loki**
+- **Grafana** lets you query metrics and logs in one place
+
+Config files: `prometheus.yml`, `promtail-config.yml`.
+
+### Grafana first-time setup
+
+Login at http://localhost:3000 (default: `admin` / `admin`).
+
+Add two datasources (Connections → Data sources):
+
+1. **Prometheus** → URL `http://prometheus:9090`
+2. **Loki** → URL `http://loki:3100`
+
+Then try **Explore**:
+
+- Prometheus: `http_requests_total` or `http_request_duration_seconds_bucket`
+- Loki: `{job="containerlogs"} |= "Created incident"` (after creating an incident)
+
+Hit `GET /error` to generate a 500 and see it in both metrics and logs.
+
+Promtail reads logs from all containers in this POC, not just the app.
 
 ## API endpoints
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/incidents` | Create an incident |
-| `GET` | `/incidents` | List all incidents |
-| `GET` | `/health` | Readiness probe (200 if DB reachable, 503 otherwise) |
-| `GET` | `/error` | Intentional 500 for error-handling tests |
-| `GET` | `/metrics` | Prometheus metrics |
+- `POST /incidents` — create an incident
+- `GET /incidents` — list incidents
+- `GET /health` — 200 if DB is up, 503 if not
+- `GET /error` — throws on purpose (for testing alerts)
+- `GET /metrics` — Prometheus metrics
 
-### Example: create an incident
+Example:
 
 ```bash
 curl -X POST http://localhost:8000/incidents \
   -H "Content-Type: application/json" \
-  -d '{
-    "title": "Database outage",
-    "description": "Primary cluster unreachable",
-    "severity": "critical",
-    "status": "open"
-  }'
+  -d '{"title":"Outage","description":"DB is down","severity":"critical","status":"open"}'
+
+curl http://localhost:8000/incidents
 ```
 
 ## Check the database
@@ -64,7 +85,7 @@ docker compose exec db psql -U incident_user -d incidents
 
 ## Tests
 
-No Docker needed for tests — they use in-memory SQLite.
+No Docker needed — tests use in-memory SQLite.
 
 ```bash
 python3.12 -m venv .venv
@@ -73,14 +94,15 @@ pip install -r requirements.txt
 pytest -v
 ```
 
-Tests use an in-memory SQLite database and do not require PostgreSQL.
-
 ## Project structure
 
 ```
-app/          — application code
-tests/        — pytest tests
+app/                  — application code
+tests/                — pytest tests
+prometheus.yml        — Prometheus scrape config
+promtail-config.yml   — Promtail → Loki config
 Dockerfile
 docker-compose.yml
 requirements.txt
+.github/workflows/    — CI/CD pipeline
 ```
